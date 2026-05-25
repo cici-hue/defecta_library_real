@@ -1,0 +1,6 @@
+tree 2fb45b65f8e9efc30eb5eb79075e09cd0c09c27b
+parent a1889f581dad0af7e38d6fcacb0ddd05ef02866c
+author cici-hue <cici.duan@ottoint.com> 1779689954 +0800
+committer cici-hue <cici.duan@ottoint.com> 1779689954 +0800
+
+fix: remove large uploads from git, update .env.example
