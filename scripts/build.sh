@@ -1,17 +1,10 @@
 #!/bin/bash
-set -Eeuo pipefail
+set -e
 
-COZE_WORKSPACE_PATH="${COZE_WORKSPACE_PATH:-$(pwd)}"
+echo "=== Installing dependencies ==="
+pnpm install --frozen-lockfile || pnpm install
 
-cd "${COZE_WORKSPACE_PATH}"
-
-echo "Installing dependencies..."
-pnpm install --prefer-frozen-lockfile --prefer-offline --loglevel debug --reporter=append-only
-
-echo "Building the Next.js project..."
+echo "=== Building Next.js application ==="
 pnpm next build
 
-echo "Bundling server with tsup..."
-pnpm tsup src/server.ts --format cjs --platform node --target node20 --outDir dist --no-splitting --no-minify
-
-echo "Build completed successfully!"
+echo "=== Build completed successfully ==="
