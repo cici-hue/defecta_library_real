@@ -1,0 +1,11 @@
+name = "defecta-library"
+main = ".next/standalone/server.js"
+compatibility_date = "2025-05-25"
+compatibility_flags = ["nodejs_compat"]
+
+[build]
+command = "pnpm next build"
+output_dir = ".next/static"
+
+[site]
+bucket = ".next/static"
