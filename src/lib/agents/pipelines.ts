@@ -590,13 +590,38 @@ export async function saveDefectCases(
 ): Promise<number> {
   const client = getSupabaseClient();
   let savedCount = 0;
+  const usedImageIds = new Set<string>();
 
-  for (const extractedCase of extractedCases) {
+  for (let i = 0; i < extractedCases.length; i++) {
+    const extractedCase = extractedCases[i];
     try {
-      // Find matching image
-      const matchingImage = storedImages.find(
-        (img) => img.filename === extractedCase.image_reference
+      let matchingImage: { id: string; filename: string } | undefined;
+
+      // Strategy 1: Exact match
+      matchingImage = storedImages.find(
+        (img) => img.filename === extractedCase.image_filename && !usedImageIds.has(img.id)
       );
+
+      // Strategy 2: Contains match (image reference is part of filename or vice versa)
+      if (!matchingImage && extractedCase.image_filename) {
+        const ref = extractedCase.image_filename.toLowerCase().replace(/\.(png|jpg|jpeg|gif|webp|emf|wmf)$/i, "");
+        matchingImage = storedImages.find((img) => {
+          const fname = img.filename.toLowerCase().replace(/\.(png|jpg|jpeg|gif|webp|emf|wmf)$/i, "");
+          return (fname.includes(ref) || ref.includes(fname)) && !usedImageIds.has(img.id);
+        });
+      }
+
+      // Strategy 3: Sequential assignment (round-robin)
+      if (!matchingImage) {
+        const availableImage = storedImages.find((img) => !usedImageIds.has(img.id));
+        if (availableImage) {
+          matchingImage = availableImage;
+        }
+      }
+
+      if (matchingImage) {
+        usedImageIds.add(matchingImage.id);
+      }
 
       const { error } = await client.from("defect_cases").insert({
         document_id: documentId,

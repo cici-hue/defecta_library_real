@@ -38,7 +38,7 @@ export interface DefectCaseWithImage extends DefectCase {
 }
 
 export interface ExtractedDefectCase {
-  image_reference: string;
+  image_filename: string;
   materials?: string;
   style?: string;
   claim_reason: string;
