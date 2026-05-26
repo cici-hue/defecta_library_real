@@ -1240,10 +1240,10 @@ export async function* defectCaseRetrievalPipeline(
     intentInput += `\n请分析用户的查询意图，包括图片和文字信息。`;
   }
 
-  let intent: IntentResult;
+  let intent: any;
   try {
     const intentRaw = await callAgent("intent-recognition", intentInput, requestHeaders);
-    intent = parseAgentJson<IntentResult>(intentRaw);
+    intent = parseAgentJson<any>(intentRaw);
   } catch (err) {
     console.error("Intent recognition failed:", err);
     intent = {
@@ -1275,6 +1275,49 @@ export async function* defectCaseRetrievalPipeline(
     
     yield rejectionMsg;
     return;
+  }
+
+  // Step 1.3: Vision Analysis (NEW - when image is uploaded)
+  let visionAnalysisResult: any = null;
+  if (imageData) {
+    try {
+      // Note: This requires a vision-capable model. For now, we'll use text description
+      // In production, replace with actual vision model API call (GPT-4V, Qwen-VL, etc.)
+      const visionPrompt = `用户上传了一张图片（${imageMimeType || 'unknown'}格式）用于分析服装缺陷。
+      
+由于当前模型不支持直接图片输入，请基于以下信息进行推断：
+- 用户问题：${question}
+- 意图识别：${JSON.stringify(intent)}
+
+请生成一个模拟的视觉分析结果，包含可能的缺陷类型、位置等信息，标注这是基于文字的推断而非实际图片分析。`;
+
+      const visionRaw = await callAgent("vision-analysis", visionPrompt, requestHeaders);
+      visionAnalysisResult = parseAgentJson<any>(visionRaw);
+      
+      // Add vision-based search terms to intent
+      if (visionAnalysisResult?.search_keywords) {
+        intent.search_queries = [
+          ...intent.search_queries,
+          ...visionAnalysisResult.search_keywords
+        ];
+      }
+      
+      // Update filters with vision results
+      if (visionAnalysisResult?.defect_type?.primary && !intent.search_strategy.filters.claim_reason) {
+        intent.search_strategy.filters.claim_reason = visionAnalysisResult.defect_type.primary;
+      }
+      if (visionAnalysisResult?.product_info?.material_hint && !intent.search_strategy.filters.materials) {
+        intent.search_strategy.filters.materials = visionAnalysisResult.product_info.material_hint;
+      }
+      if (visionAnalysisResult?.defect_location?.position && !intent.search_strategy.filters.position) {
+        intent.search_strategy.filters.position = visionAnalysisResult.defect_location.position;
+      }
+      
+      console.log("[Vision Analysis] Result:", JSON.stringify(visionAnalysisResult, null, 2));
+    } catch (err: any) {
+      console.warn("Vision analysis failed (non-fatal):", err?.message);
+      // Continue without vision analysis - not critical
+    }
   }
 
   // Step 1.5: Semantic Understanding (NEW)
@@ -1464,7 +1507,7 @@ ${candidatesText.slice(0, 2000)}`;
     // Ignore classification fetch errors
   }
 
-  const aggregatorInput = `# 用户查询
+  let aggregatorInput = `# 用户查询
 ${question}
 
 # 查询元数据
@@ -1487,11 +1530,63 @@ ${classificationContext || '(暂无分类数据)'}
 ---
 请根据以上所有信息，为用户生成最合适的回答。
 ${isImageRequest ? '\n注意：用户明确要求查看图片，请在回答中展示相关案例的图片。' : ''}
-${semanticResult?.understood_intent?.intent_category === 'material_analysis' ? '\n注意：这是关于材料的分析请求，请提供详细的分析报告格式。' : ''}`;
+${semanticResult?.understood_intent?.intent_category === 'material_analysis' ? '\n注意：这是关于材料的分析请求，请提供详细的分析报告格式。' : ''}
+${intent?.search_strategy?.seek_measures ? '\n⚠️ 用户可能需要预防/管控建议，请在"预防与管控建议"模块中提供相关信息（如知识库中暂无此数据，请标注"[待补充]"）。' : ''}`;
 
-  // Stream the aggregated response
+  // Step 4.5: Retrieve Defect Guidelines (NEW)
+  let guidelinesContext = "";
+  if (intent?.search_strategy?.seek_measures || intent?.search_strategy?.seek_cause_analysis) {
+    try {
+      // Get the primary defect type from cases or intent
+      const primaryDefectType = candidates[0]?.claim_reason || intent?.search_strategy?.filters?.claim_reason;
+      
+      if (primaryDefectType) {
+        const { data: guidelines } = await client
+          .from("defect_guidelines")
+          .select("*")
+          .ilike("claim_reason", `%${primaryDefectType}%`)
+          .eq("status", "published")
+          .limit(3);
+
+        if (guidelines && guidelines.length > 0) {
+          guidelinesContext = "\n\n# 缺陷管控指南（来自知识库）\n";
+          guidelines.forEach((g: any, i: number) => {
+            guidelinesContext += `\n## 指南 ${i + 1}: ${g.claim_reason}\n`;
+            if (g.root_causes) guidelinesContext += `**常见原因**: ${JSON.stringify(g.root_causes)}\n`;
+            if (g.prevention_measures) guidelinesContext += `**预防措施**: ${JSON.stringify(g.prevention_measures)}\n`;
+            if (g.process_controls) guidelinesContext += `**流程控制**: ${JSON.stringify(g.process_controls)}\n`;
+            if (g.quality_checkpoints) guidelinesContext += `**质检要点**: ${JSON.stringify(g.quality_checkpoints)}\n`;
+            guidelinesContext += `*数据完整度: ${g.completeness === 'complete' ? '完整' : '部分'}*\n`;
+          });
+          
+          // Append guidelines to aggregator input
+          aggregatorInput += guidelinesContext;
+        } else {
+          // No published guidelines found - add placeholder
+          aggregatorInput += `\n\n# 缺陷管控指南
+⚠️ **[待补充]** 知识库中暂无"${primaryDefectType}"类型的完整管控指南数据。
+请在回答的"预防与管控建议"模块中：
+1. 标注"**[待补充]** - 此模块知识库正在持续完善中"
+2. 基于案例信息给出通用建议（如有）
+3. 建议用户联系质量管理专家获取专业指导`;
+        }
+      }
+    } catch (err: any) {
+      console.warn("Guidelines retrieval failed:", err?.message);
+    }
+  }
+
+  // Add vision analysis context to the input
+  if (visionAnalysisResult) {
+    aggregatorInput = `# 图片分析结果
+${JSON.stringify(visionAnalysisResult, null, 2)}
+
+---\n\n` + aggregatorInput;
+  }
+
+  // Use enhanced answer-generation agent instead of response-aggregator
   let fullResponse = "";
-  for await (const chunk of callAgentStream("response-aggregator", aggregatorInput, requestHeaders)) {
+  for await (const chunk of callAgentStream("answer-generation", aggregatorInput, requestHeaders)) {
     fullResponse += chunk;
     yield chunk;
   }
@@ -1506,7 +1601,12 @@ ${semanticResult?.understood_intent?.intent_category === 'material_analysis' ? '
       relevance: r.relevance_score > 0.8 ? "high" : r.relevance_score > 0.5 ? "medium" : "low",
       reason: r.match_reason,
     })),
-    intent_result: { ...intent, semantic_result: semanticResult },
+    intent_result: { 
+      ...intent, 
+      semantic_result: semanticResult,
+      vision_analysis: visionAnalysisResult,
+      guidelines_found: !!guidelinesContext 
+    },
   });
 }
 

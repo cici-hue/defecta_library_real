@@ -172,3 +172,46 @@ export const defectCases = pgTable(
     index("defect_cases_claim_reason_idx").on(table.claim_reason),
   ]
 );
+
+// Defect guidelines (缺陷管控指南)
+export const defectGuidelines = pgTable(
+  "defect_guidelines",
+  {
+    id: varchar("id", { length: 36 }).primaryKey().default(sql`gen_random_uuid()`),
+    
+    // 分类信息
+    claim_reason: varchar("claim_reason", { length: 200 }).notNull(),
+    materials: jsonb("materials"), // 适用材料列表
+    
+    // 核心内容
+    root_causes: jsonb("root_causes"), // 常见原因
+    prevention_measures: jsonb("prevention_measures"), // 预防措施
+    process_controls: jsonb("process_controls"), // 生产流程控制点
+    quality_checkpoints: jsonb("quality_checkpoints"), // 质检要点
+    
+    // 关联信息
+    related_defect_types: jsonb("related_defect_types"), // 相关缺陷类型
+    risk_level: varchar("risk_level", { length: 20 }), // 风险等级: high/medium/low
+    
+    // 来源
+    source_document_id: varchar("source_document_id", { length: 36 }).references(() => documents.id, { onDelete: "set null" }),
+    source_type: varchar("source_type", { length: 50 }).notNull().default("auto_generated"), // auto_generated / manual / external
+    
+    // 状态
+    status: varchar("status", { length: 20 }).notNull().default("draft"), // draft / published / deprecated
+    completeness: varchar("completeness", { length: 20 }).notNull().default("partial"), // partial / complete
+    
+    // 元数据
+    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+    updated_at: timestamp("updated_at", { withTimezone: true }),
+    
+    // 版本控制
+    version: integer("version").notNull().default(1),
+    notes: text("notes"), // 补充说明
+  },
+  (table) => [
+    index("defect_guidelines_claim_reason_idx").on(table.claim_reason),
+    index("defect_guidelines_status_idx").on(table.status),
+    index("defect_guidelines_risk_level_idx").on(table.risk_level),
+  ]
+);
