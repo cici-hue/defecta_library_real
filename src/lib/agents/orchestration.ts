@@ -8,7 +8,7 @@
 import { LLMClient, Config, HeaderUtils } from "coze-coding-dev-sdk";
 import { EmbeddingClient } from "coze-coding-dev-sdk";
 import { AGENT_CONFIG, type AgentName } from "./prompts";
-import { getLLMConfig, type LLMProvider } from "@/lib/llm-config";
+import { getLLMConfig, type LLMProvider, getVisionModelConfig, isVisionModelConfigured } from "@/lib/llm-config";
 
 // DeepSeek/OpenAI 兼容的 API 调用
 async function callDeepSeekAPI(
@@ -303,4 +303,104 @@ export function parseAgentJson<T = unknown>(content: string): T {
     }
     throw new Error("Failed to parse agent JSON output");
   }
+}
+
+// ============================================================
+// Vision Model Integration (视觉模型集成)
+// ============================================================
+
+/**
+ * 获取图片的 MIME 类型
+ */
+function getImageMimeType(buffer: Buffer, fallbackMimeType?: string): string {
+  if (fallbackMimeType) return fallbackMimeType;
+  
+  // 通过文件头检测
+  const header = buffer.slice(0, 4).toString("hex");
+  if (header.startsWith("89504e47")) return "image/png";
+  if (header.startsWith("ffd8ff")) return "image/jpeg";
+  if (header.startsWith("47494638")) return "image/gif";
+  if (header.startsWith("52494646")) return "image/webp";
+  return "image/png"; // 默认
+}
+
+/**
+ * 调用视觉模型分析图片
+ * 支持 OpenAI 兼容接口（Qwen-VL、GPT-4V 等）
+ */
+export async function callVisionModel(
+  imageBuffer: Buffer,
+  systemPrompt: string,
+  userPrompt: string,
+  mimeType?: string
+): Promise<string> {
+  const visionConfig = getVisionModelConfig();
+  
+  if (!visionConfig) {
+    throw new Error("Vision model not configured. Please set VISION_API_KEY in environment variables.");
+  }
+
+  console.log(`[Vision] Using model: ${visionConfig.model} (${visionConfig.provider})`);
+  
+  const imageBase64 = imageBuffer.toString("base64");
+  const detectedMime = getImageMimeType(imageBuffer, mimeType);
+  
+  // 构建 OpenAI 兼容的多模态消息格式
+  const messages = [
+    {
+      role: "system" as const,
+      content: systemPrompt
+    },
+    {
+      role: "user" as const,
+      content: [
+        {
+          type: "image_url" as const,
+          image_url: {
+            url: `data:${detectedMime};base64,${imageBase64}`,
+            detail: "high" as const
+          }
+        },
+        {
+          type: "text" as const,
+          text: userPrompt
+        }
+      ]
+    }
+  ];
+
+  const url = `${visionConfig.baseUrl}/chat/completions`;
+  
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${visionConfig.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: visionConfig.model,
+      messages,
+      temperature: 0.1,
+      max_tokens: 4096,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[Vision] API error (${response.status}):`, errorText);
+    throw new Error(`Vision model API error: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || "";
+  
+  console.log(`[Vision] Analysis completed, response length: ${content.length}`);
+  return content;
+}
+
+/**
+ * 检查是否可以使用视觉模型
+ */
+export function canUseVisionModel(): boolean {
+  return isVisionModelConfigured();
 }

@@ -13,6 +13,8 @@ import {
   generateEmbeddings,
   cosineSimilarity,
   parseAgentJson,
+  callVisionModel,
+  canUseVisionModel,
 } from "./orchestration";
 import { uploadFileLocal } from "@/lib/local-storage";
 import type { ExtractedImage } from "@/lib/document-parser";
@@ -1277,22 +1279,45 @@ export async function* defectCaseRetrievalPipeline(
     return;
   }
 
-  // Step 1.3: Vision Analysis (NEW - when image is uploaded)
+  // Step 1.3: Vision Analysis (使用真实视觉模型)
   let visionAnalysisResult: any = null;
   if (imageData) {
     try {
-      // Note: This requires a vision-capable model. For now, we'll use text description
-      // In production, replace with actual vision model API call (GPT-4V, Qwen-VL, etc.)
-      const visionPrompt = `用户上传了一张图片（${imageMimeType || 'unknown'}格式）用于分析服装缺陷。
+      if (canUseVisionModel()) {
+        // 使用真实的视觉模型分析图片
+        console.log("[Vision] Using real vision model for image analysis...");
+        
+        const visionSystemPrompt = `你是服装缺陷识别专家，专门分析用户上传的缺陷照片。
+请仔细观察图片，提取可用于检索相似案例的关键信息。`;
+        
+        const visionUserPrompt = question 
+          ? `${question}\n\n请分析这张图片中的服装缺陷，提取：缺陷类型、产品信息、位置、严重程度等关键信息。`
+          : "请分析这张图片中的服装缺陷，提取：缺陷类型、产品信息（材料/款式）、位置、严重程度等关键信息，并生成用于检索的搜索关键词。";
+
+        const visionRaw = await callVisionModel(
+          imageData,
+          visionSystemPrompt,
+          visionUserPrompt,
+          imageMimeType
+        );
+        
+        visionAnalysisResult = parseAgentJson<any>(visionRaw);
+        console.log("[Vision] Real analysis completed:", JSON.stringify(visionAnalysisResult, null, 2));
+      } else {
+        // 视觉模型未配置，使用文本 LLM 模拟
+        console.warn("[Vision] Vision model not configured, using text-based fallback");
+        
+        const visionPrompt = `用户上传了一张图片（${imageMimeType || 'unknown'}格式）用于分析服装缺陷。
       
-由于当前模型不支持直接图片输入，请基于以下信息进行推断：
+由于视觉模型未配置，请基于以下信息进行推断：
 - 用户问题：${question}
 - 意图识别：${JSON.stringify(intent)}
 
 请生成一个模拟的视觉分析结果，包含可能的缺陷类型、位置等信息，标注这是基于文字的推断而非实际图片分析。`;
 
-      const visionRaw = await callAgent("vision-analysis", visionPrompt, requestHeaders);
-      visionAnalysisResult = parseAgentJson<any>(visionRaw);
+        const visionRaw = await callAgent("vision-analysis", visionPrompt, requestHeaders);
+        visionAnalysisResult = parseAgentJson<any>(visionRaw);
+      }
       
       // Add vision-based search terms to intent
       if (visionAnalysisResult?.search_keywords) {
@@ -1315,7 +1340,7 @@ export async function* defectCaseRetrievalPipeline(
       
       console.log("[Vision Analysis] Result:", JSON.stringify(visionAnalysisResult, null, 2));
     } catch (err: any) {
-      console.warn("Vision analysis failed (non-fatal):", err?.message);
+      console.error("Vision analysis failed:", err?.message);
       // Continue without vision analysis - not critical
     }
   }

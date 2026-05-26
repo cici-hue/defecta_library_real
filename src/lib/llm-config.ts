@@ -13,6 +13,14 @@ export interface LLMConfig {
   temperature?: number;
 }
 
+// 视觉模型配置
+export interface VisionModelConfig {
+  provider: "qwen" | "openai" | "custom";
+  apiKey: string;
+  baseUrl: string;
+  model: string; // 如 qwen-vl-max, gpt-4o, gpt-4-turbo 等
+}
+
 // 默认模型配置
 export const DEFAULT_MODELS: Record<LLMProvider, { model: string; baseUrl?: string }> = {
   coze: {
@@ -95,4 +103,50 @@ LLM_TEMPERATURE=0.1
 # LLM_INTENT_MODEL=deepseek-chat
 # LLM_RETRIEVAL_MODEL=deepseek-chat
 # LLM_ANSWER_MODEL=deepseek-chat
+
+# ============================================================
+# 视觉模型配置（用于图片理解）
+# ============================================================
+
+# 视觉模型提供商: qwen | openai | custom
+VISION_PROVIDER=qwen
+
+# 视觉模型 API Key（可与LLM相同或不同）
+VISION_API_KEY=your-vision-api-key
+
+# 视觉模型 Base URL
+# Qwen-VL 默认: https://dashscope.aliyuncs.com/compatible-mode/v1
+# OpenAI 默认: https://api.openai.com/v1
+VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+
+# 视觉模型名称
+# Qwen: qwen-vl-max, qwen-vl-plus
+# OpenAI: gpt-4o, gpt-4-turbo, gpt-4-vision-preview
+VISION_MODEL=qwen-vl-max
 `;
+
+// 获取视觉模型配置
+export function getVisionModelConfig(): VisionModelConfig | null {
+  const provider = (process.env.VISION_PROVIDER as VisionModelConfig["provider"]) || "qwen";
+  const apiKey = process.env.VISION_API_KEY || process.env.LLM_API_KEY || "";
+  
+  if (!apiKey) {
+    console.warn("[Vision] No API key configured for vision model. Set VISION_API_KEY or LLM_API_KEY");
+    return null;
+  }
+
+  const baseUrl = process.env.VISION_BASE_URL || 
+    (provider === "qwen" ? "https://dashscope.aliyuncs.com/compatible-mode/v1" :
+     provider === "openai" ? "https://api.openai.com/v1" : "");
+  
+  const model = process.env.VISION_MODEL || 
+    (provider === "qwen" ? "qwen-vl-max" :
+     provider === "openai" ? "gpt-4o" : "gpt-4o");
+
+  return { provider, apiKey, baseUrl, model };
+}
+
+// 检查视觉模型是否已配置
+export function isVisionModelConfigured(): boolean {
+  return !!(process.env.VISION_API_KEY || process.env.LLM_API_KEY);
+}
